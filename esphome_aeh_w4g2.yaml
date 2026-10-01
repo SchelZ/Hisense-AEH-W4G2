@@ -10,13 +10,13 @@ substitutions:
 
   # Wi-Fi
   wifi_ssid: "my_wifi_test"
-  wifi_password: "test123!"
+  wifi_password: "test1234!"
 
   # UART
   uart_tx_pin: "PA23"
   uart_rx_pin: "PA18"
   uart_baud_rate: "9600"
-  flow_control_pin: "PA14"
+  flow_control_pin: PA14
  
 safe_mode:
   num_attempts: 3
@@ -32,14 +32,10 @@ esphome:
       - -Os
       - -ffunction-sections
       - -fdata-sections
-      - -fno-rtti
       - -fno-exceptions
       - -Wl,--gc-sections            # Linker remove unsed sections
       - -s                           # Strip all symbol tables and debug info from binary
       - -D CORE_DEBUG_LEVEL=0        # Turn off internal Arduino framework logs
-    build_flags_cxx:
-      - -fno-rtti
-      - -fno-exceptions
     build_unflags:
       - -O2
       - -O3
@@ -98,7 +94,7 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: ${flow_control_pin}
+    flow_control_pin: 14
     indoor_temperature:
       name: "Indoor Temperature"
     indoor_humidity:
