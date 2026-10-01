@@ -10,7 +10,7 @@ substitutions:
 
   # Wi-Fi
   wifi_ssid: "my_wifi_test"
-  wifi_password: "test"
+  wifi_password: "test123!"
 
   # UART
   uart_tx_pin: "PA23"
@@ -23,7 +23,7 @@ safe_mode:
 
 esphome:
   name: ${device_name}
-  friendly_name: ${friendly}
+  friendly_name: ${friendly_name}
   platformio_options:
     platform: ${platform_url}
     platform_packages:
