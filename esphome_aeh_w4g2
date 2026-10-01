@@ -1,0 +1,131 @@
+substitutions:
+  # Device
+  device_name: "ac-livingroom"
+  friendly_name: "AEH-W4G2 AC"
+
+  # Platform
+  platform_url: "https://github.com/libretiny-eu/libretiny.git#v1.13.0"
+  arduino_api_url: "https://github.com/hn/ArduinoCore-API#RingBufferFix"
+  board: "generic-rtl8710bn-2mb-468k"
+
+  # Wi-Fi
+  wifi_ssid: "my_wifi_test"
+  wifi_password: "test"
+
+  # UART
+  uart_tx_pin: "PA23"
+  uart_rx_pin: "PA18"
+  uart_baud_rate: "9600"
+  flow_control_pin: "PA14"
+ 
+safe_mode:
+  num_attempts: 3
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly}
+  platformio_options:
+    platform: ${platform_url}
+    platform_packages:
+      - framework-arduino-api @ ${arduino_api_url}
+    build_flags:
+      - -Os
+      - -ffunction-sections
+      - -fdata-sections
+      - -fno-rtti
+      - -fno-exceptions
+      - -Wl,--gc-sections            # Linker remove unsed sections
+      - -s                           # Strip all symbol tables and debug info from binary
+      - -D CORE_DEBUG_LEVEL=0        # Turn off internal Arduino framework logs
+    build_flags_cxx:
+      - -fno-rtti
+      - -fno-exceptions
+    build_unflags:
+      - -O2
+      - -O3
+      - -g
+ 
+rtl87xx:
+  board: ${board}
+ 
+external_components:
+  - source:
+      type: local
+      path: my_components
+    components: [hisense_wings]
+ 
+logger:
+  level: WARN
+  baud_rate: 0
+ 
+ota:
+  - platform: esphome
+ 
+api:
+ 
+mdns:
+  disabled: true
+ 
+web_server:
+  port: 80
+  compression: gzip
+  version: 2
+  auth:
+    username: "admin"
+    password: "kktpansat!"
+    type: basic
+ 
+wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
+  fast_connect: true
+  power_save_mode: none
+  reboot_timeout: 15min
+  ap:
+    ssid: "${device_name}_ap"
+    ap_timeout: 90s
+ 
+captive_portal:
+
+uart:
+  id: ac_uart
+  tx_pin: ${uart_tx_pin}
+  rx_pin: ${uart_rx_pin}
+  baud_rate: ${uart_baud_rate}
+
+climate:
+  - platform: hisense_wings
+    name: "Hisense AC"
+    id: hisense_climate
+    uart_id: ac_uart
+    flow_control_pin: ${flow_control_pin}
+    indoor_temperature:
+      name: "Indoor Temperature"
+    indoor_humidity:
+      name: "Indoor Humidity"
+    outdoor_temperature:
+      name: "Outdoor Temperature"
+
+switch:
+  - platform: hisense_wings
+    hisense_wings_id: hisense_climate
+    display:
+      name: "Display"
+      icon: "mdi:numeric"
+      restore_mode: RESTORE_DEFAULT_ON
+    boost:
+      name: "Boost"
+      icon: "mdi:rocket-launch"
+    eco:
+      name: "ECO"
+      icon: "mdi:leaf"
+    quiet:
+      name: "Quiet"
+      icon: "mdi:volume-low"
+    sleep:
+      name: "Sleep"
+      icon: "mdi:sleep"
+    beep:
+      name: "Beep"
+      icon: "mdi:volume-high"
+      restore_mode: RESTORE_DEFAULT_ON
