@@ -12,6 +12,10 @@ substitutions:
   wifi_ssid: "my_wifi_test"
   wifi_password: "test1234!"
 
+  # Web_server
+  web_username: "test"
+  web_password: "password123!"
+
   # UART
   uart_tx_pin: "PA23"
   uart_rx_pin: "PA18"
@@ -67,8 +71,8 @@ web_server:
   compression: gzip
   version: 2
   auth:
-    username: "admin"
-    password: "kktpansat!"
+    username: ${web_username}
+    password: ${web_password}
     type: basic
  
 wifi:
@@ -94,13 +98,13 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: 14
+    flow_control_pin: PA14
     indoor_temperature:
       name: "Indoor Temperature"
-    indoor_humidity:
-      name: "Indoor Humidity"
     outdoor_temperature:
-      name: "Outdoor Temperature"
+      # Really the outdoor condenser / exhaust temp. Useful for diagnostics
+      # (shows compressor load) rather than ambient outdoor temp.
+      name: "Outdoor Condenser Temperature"
 
 switch:
   - platform: hisense_wings
@@ -122,6 +126,10 @@ switch:
       name: "Sleep"
       icon: "mdi:sleep"
     beep:
+      # When ON, every command the AC receives chirps once (default behaviour).
+      # When OFF, commands are sent with the "mute buzzer" flag so the AC
+      # stays silent. Equivalent to the "silent operation" switch in the
+      # Hisense app.
       name: "Beep"
       icon: "mdi:volume-high"
       restore_mode: RESTORE_DEFAULT_ON
