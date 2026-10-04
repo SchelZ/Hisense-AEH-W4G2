@@ -122,7 +122,9 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_SWING_HORIZONTAL,
       climate::CLIMATE_SWING_BOTH,
   });
-  t.set_supports_current_temperature(true);
+  // Note: set_supports_current_temperature() was removed in newer ESPHome;
+  // current_temperature is published implicitly whenever we call publish_state()
+  // after assigning this->current_temperature.
   return t;
 }
 
