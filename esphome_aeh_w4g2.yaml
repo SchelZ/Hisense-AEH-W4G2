@@ -98,7 +98,7 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: flow_control_pin
+    flow_control_pin: ${flow_control_pin}
     indoor_temperature:
       name: "Indoor Temperature"
     outdoor_temperature:
