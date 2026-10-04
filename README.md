@@ -6,13 +6,13 @@
 * Flash: 93.0% (used 445692 bytes from 479232 bytes)
 </br>
 
-### ! This is the circuit diagram used to sniff the commands made by ARH-W4G2 Wi-Fi module using ESP32 !
+### ! This is the circuit diagram used to sniff the commands made by AEH-W4G2 Wi-Fi module using ESP32 !
 <img width="1566" height="1818" alt="circuit_image" src="https://github.com/user-attachments/assets/f10cdf1b-b5d6-475b-89b7-221ddf9a1ca4" />
 
 </br>
 </br>
 
-### ! This is the circuit diagram used to sniff the commands made by ARH-W4G2 Wi-Fi module using ESP32 !
+### ! This is the circuit diagram used for flashing AEH-W4G2 Wi-Fi module !
 <img width="1987" height="950" alt="circuit_image (1)" src="https://github.com/user-attachments/assets/5142624c-9454-4600-bd3d-05690177afc5" />
 
 
