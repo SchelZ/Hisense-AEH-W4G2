@@ -17,9 +17,9 @@ substitutions:
   web_password: "password123!"
 
   # UART
-  uart_tx_pin: "PA23"
-  uart_rx_pin: "PA18"
-  uart_baud_rate: "9600"
+  uart_tx_pin: PA23
+  uart_rx_pin: PA18
+  uart_baud_rate: 9600
   flow_control_pin: PA14
  
 safe_mode:
@@ -98,7 +98,7 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: PA14
+    flow_control_pin: flow_control_pin
     indoor_temperature:
       name: "Indoor Temperature"
     outdoor_temperature:
