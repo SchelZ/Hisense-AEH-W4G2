@@ -1,4 +1,5 @@
 # Hisense AC flashing with esphome
+# ! This project was done for Hisense Wings Comfort 12000BTU, code AERKB35MR0B
 * Wi-Fi module used in this project is AEH-W4G2
 * This project scopes in flashing esphome on AEH-W4G2 ; have all the commands that Hisense app has ; have OTA available for easier features updates
 </br>
