@@ -168,7 +168,8 @@ class HisenseWings : public Component,
   void set_eco(bool on)       { pending_.eco = on ? 1 : 0;     pending_.mask |= M_ECO;     dirty_ = true; }
   void set_quiet(bool on)     { pending_.quiet = on ? 1 : 0;   pending_.mask |= M_QUIET;   dirty_ = true; }
   void set_sleep(bool on)     { pending_.sleep = on ? 1 : 0;   pending_.mask |= M_SLEEP;   dirty_ = true; }
-  void set_beep(bool on)      { pending_.beep = on ? 1 : 0;    pending_.mask |= M_BEEP;    dirty_ = true; }
+  // Switch ON = silent (mute), OFF = normal beeping. Default (OFF) = beeps.
+  void set_mute_beep(bool on) { mute_beep_ = on; }
 
  protected:
   // ---- Incoming frame handling ----
@@ -197,15 +198,14 @@ class HisenseWings : public Component,
   uint8_t last_byte_ {0};
 
   // Pending command state. The AC rejects frames that set multiple fields
-  // at once — each 0x29 command should set exactly ONE field (plus the
-  // buzzer flag). The mask tracks which field changed since the last send.
+  // at once — each 0x29 command should set exactly ONE field. The mask
+  // tracks which field changed since the last send.
   enum : uint16_t {
     M_DISPLAY = 1 << 0,
     M_BOOST   = 1 << 1,
     M_ECO     = 1 << 2,
     M_QUIET   = 1 << 3,
     M_SLEEP   = 1 << 4,
-    M_BEEP    = 1 << 5,
     M_MODE    = 1 << 6,
     M_TEMP    = 1 << 7,
     M_FAN     = 1 << 8,
@@ -218,12 +218,15 @@ class HisenseWings : public Component,
     uint8_t eco     : 1;
     uint8_t quiet   : 1;
     uint8_t sleep   : 1;
-    uint8_t beep    : 1;
   } pending_ {};
+
+  // Mute-beep is NOT a pending change — it's a persistent per-command flag
+  // applied to every outgoing command. Default OFF = AC beeps normally.
+  bool mute_beep_ {false};
   bool dirty_ {false};
   uint32_t last_poll_ms_ {0};
   uint32_t last_send_ms_ {0};
-  bool beep_enabled_ {true};
+
 
   // Hardware config
   GPIOPin *flow_control_pin_ {nullptr};
@@ -250,6 +253,7 @@ class FeatureSwitch : public esphome::switch_::Switch, public Component {
  protected:
   HisenseWings *parent_ {nullptr};
   uint8_t feature_id_ {0};
+  bool initialized_ {false};
 };
 
 }  // namespace hisense_wings
