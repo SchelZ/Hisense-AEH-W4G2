@@ -196,18 +196,23 @@ class HisenseWings : public Component,
   size_t rx_len_ {0};
   uint8_t last_byte_ {0};
 
-  // Pending command state (feature toggles set by user)
-  // Everything is a nibble/bit so the whole struct is a few bytes.
-  enum : uint8_t {
+  // Pending command state. The AC rejects frames that set multiple fields
+  // at once — each 0x29 command should set exactly ONE field (plus the
+  // buzzer flag). The mask tracks which field changed since the last send.
+  enum : uint16_t {
     M_DISPLAY = 1 << 0,
     M_BOOST   = 1 << 1,
     M_ECO     = 1 << 2,
     M_QUIET   = 1 << 3,
     M_SLEEP   = 1 << 4,
     M_BEEP    = 1 << 5,
+    M_MODE    = 1 << 6,
+    M_TEMP    = 1 << 7,
+    M_FAN     = 1 << 8,
+    M_SWING   = 1 << 9,
   };
   struct Pending {
-    uint8_t mask;
+    uint16_t mask;
     uint8_t display : 1;
     uint8_t boost   : 1;
     uint8_t eco     : 1;
