@@ -139,12 +139,14 @@ void HisenseWings::loop() {
 
   const uint32_t now = millis();
 
-  if (dirty_ && (now - last_send_ms_) > SEND_COOLDOWN_MS) {
+  // Keep sending while there are pending changes. Each call to
+  // send_command_frame_() sets ONE field and clears its mask bit.
+  // We throttle by SEND_COOLDOWN_MS so successive beeps don't overlap.
+  if (pending_.mask != 0 && (now - last_send_ms_) > SEND_COOLDOWN_MS) {
     send_command_frame_();
-    dirty_ = false;
-    pending_.mask = 0;
     last_send_ms_ = now;
-  } else if ((now - last_poll_ms_) > POLL_INTERVAL_MS) {
+    if (pending_.mask == 0) dirty_ = false;
+  } else if (pending_.mask == 0 && (now - last_poll_ms_) > POLL_INTERVAL_MS) {
     send_status_request_();
     last_poll_ms_ = now;
   }
@@ -281,18 +283,22 @@ void HisenseWings::publish_from_status_() {
 void HisenseWings::control(const climate::ClimateCall &call) {
   if (call.get_mode().has_value()) {
     this->mode = *call.get_mode();
+    pending_.mask |= M_MODE;
     dirty_ = true;
   }
   if (call.get_target_temperature().has_value()) {
     this->target_temperature = *call.get_target_temperature();
+    pending_.mask |= M_TEMP;
     dirty_ = true;
   }
   if (call.get_fan_mode().has_value()) {
     this->fan_mode = *call.get_fan_mode();
+    pending_.mask |= M_FAN;
     dirty_ = true;
   }
   if (call.get_swing_mode().has_value()) {
     this->swing_mode = *call.get_swing_mode();
+    pending_.mask |= M_SWING;
     dirty_ = true;
   }
 }
@@ -311,17 +317,22 @@ void HisenseWings::send_status_request_() {
 // ---------------------------------------------------------------------------
 //  Build and send a command frame.
 //
-//  46-byte payload. Each command sets ONE field at a time (that's how the
-//  Hisense app operates), but ESPHome's model is "apply current state", so
-//  we send a frame with the field(s) that changed. Other feature flags are
-//  carried in from the last known status or last pending state.
+//  CRITICAL: The AC rejects frames that set multiple fields at once. Each
+//  0x29 command must set EXACTLY ONE field (plus byte 23 buzzer flag).
+//  All other field bytes stay 0x00. This matches exactly what the Hisense
+//  app does over the wire.
+//
+//  So each call here produces ONE field-change frame, picked by priority
+//  from the pending mask. If the user changes multiple things at once in
+//  the HA UI, we queue them: loop() will call this repeatedly, each call
+//  sending one field, until the mask is empty.
 // ---------------------------------------------------------------------------
 void HisenseWings::send_command_frame_() {
   uint8_t f[46] = {
     0xF4, 0xF5, 0x00, 0x40, 0x29, 0x00, 0x00, 0x01, 0x01, 0xFE, 0x01,
     0x00, 0x00, 0x65, 0x00, 0x00,   // [0..15] header
     0x00, 0x00, 0x00, 0x00,         // [16 fan][17 sleep][18 mode][19 temp]
-    0x00, 0x00, 0x00, 0x00,         // [20..22][23 buzzer] -- buzzer set below
+    0x00, 0x00, 0x00, 0x00,         // [20..22][23 buzzer]
     0x00, 0x00, 0x00, 0x00,         // [24..27]
     0x00, 0x00, 0x00, 0x00,         // [28..31]
     0x00, 0x00, 0x00, 0x00,         // [32 swing][33 eco/boost][34][35 quiet]
@@ -330,72 +341,70 @@ void HisenseWings::send_command_frame_() {
     0x00, 0x00                      // [44..45]
   };
 
-  // --- Mode (byte 18) ---
-  switch (this->mode) {
-    case climate::CLIMATE_MODE_OFF:        f[18] = CMD_MODE_OFF;      break;
-    case climate::CLIMATE_MODE_FAN_ONLY:   f[18] = CMD_MODE_FAN_ONLY; break;
-    case climate::CLIMATE_MODE_HEAT:       f[18] = CMD_MODE_HEAT;     break;
-    case climate::CLIMATE_MODE_COOL:       f[18] = CMD_MODE_COOL;     break;
-    case climate::CLIMATE_MODE_DRY:        f[18] = CMD_MODE_DRY;      break;
-    case climate::CLIMATE_MODE_HEAT_COOL:  f[18] = CMD_MODE_AUTO;     break;
-    default:                               f[18] = CMD_MODE_COOL;     break;
-  }
+  // --- Buzzer (byte 23) — included in EVERY command frame ---
+  const bool want_beep = (pending_.mask & M_BEEP) ? pending_.beep : beep_enabled_;
+  if (pending_.mask & M_BEEP) beep_enabled_ = want_beep;
+  f[23] = want_beep ? CMD_BUZZER_BEEP : CMD_BUZZER_MUTE;
 
-  // --- Target temp (byte 19): (temp << 1) | 1 ---
-  {
+  // --- Pick ONE field to send this frame, in priority order ---
+  // MODE first (changing mode often resets other things so it should go first)
+  if (pending_.mask & M_MODE) {
+    switch (this->mode) {
+      case climate::CLIMATE_MODE_OFF:        f[18] = CMD_MODE_OFF;      break;
+      case climate::CLIMATE_MODE_FAN_ONLY:   f[18] = CMD_MODE_FAN_ONLY; break;
+      case climate::CLIMATE_MODE_HEAT:       f[18] = CMD_MODE_HEAT;     break;
+      case climate::CLIMATE_MODE_COOL:       f[18] = CMD_MODE_COOL;     break;
+      case climate::CLIMATE_MODE_DRY:        f[18] = CMD_MODE_DRY;      break;
+      case climate::CLIMATE_MODE_HEAT_COOL:  f[18] = CMD_MODE_AUTO;     break;
+      default:                               f[18] = CMD_MODE_COOL;     break;
+    }
+    pending_.mask &= ~M_MODE;
+  } else if (pending_.mask & M_TEMP) {
     int t = static_cast<int>(this->target_temperature);
     if (t < 16) t = 16;
     if (t > 32) t = 32;
     f[19] = (static_cast<uint8_t>(t) << 1) | 1u;
-  }
-
-  // --- Fan speed (byte 16): direct command values ---
-  switch (this->fan_mode.value_or(climate::CLIMATE_FAN_AUTO)) {
-    case climate::CLIMATE_FAN_AUTO:   f[16] = CMD_FAN_AUTO;  break;
-    case climate::CLIMATE_FAN_LOW:    f[16] = CMD_FAN_LOW;   break;
-    case climate::CLIMATE_FAN_FOCUS:  f[16] = CMD_FAN_MLOW;  break;
-    case climate::CLIMATE_FAN_MEDIUM: f[16] = CMD_FAN_MED;   break;
-    case climate::CLIMATE_FAN_MIDDLE: f[16] = CMD_FAN_MHIGH; break;
-    case climate::CLIMATE_FAN_HIGH:   f[16] = CMD_FAN_HIGH;  break;
-    default:                          f[16] = CMD_FAN_AUTO;  break;
-  }
-
-  // --- Swing (byte 32) ---
-  switch (this->swing_mode) {
-    case climate::CLIMATE_SWING_BOTH:       f[32] = CMD_SWING_BOTH;  break;
-    case climate::CLIMATE_SWING_VERTICAL:   f[32] = CMD_SWING_VERT;  break;
-    case climate::CLIMATE_SWING_HORIZONTAL: f[32] = CMD_SWING_HORIZ; break;
-    case climate::CLIMATE_SWING_OFF:
-    default:                                f[32] = CMD_SWING_OFF;   break;
-  }
-
-  // --- Feature flags: byte 33 (ECO+BOOST), byte 35 (QUIET), byte 36 (display)
-  // Default to OFF-base values if the user hasn't touched them this frame,
-  // so the AC doesn't interpret 0x00 as a feature state.
-  const bool want_eco     = (pending_.mask & M_ECO)     ? pending_.eco     : false;
-  const bool want_boost   = (pending_.mask & M_BOOST)   ? pending_.boost   : false;
-  const bool want_quiet   = (pending_.mask & M_QUIET)   ? pending_.quiet   : false;
-  const bool want_display = (pending_.mask & M_DISPLAY) ? pending_.display : true;
-
-  f[33] = (want_eco ? CMD_ECO_ON : CMD_ECO_OFF)
-        | (want_boost ? CMD_BOOST_ON : CMD_BOOST_OFF);
-
-  f[35] = want_quiet ? CMD_QUIET_ON : CMD_QUIET_OFF;
-
-  f[36] = want_display ? CMD_DISPLAY_ON : CMD_DISPLAY_OFF;
-
-  // --- Sleep (byte 17) ---
-  if (pending_.mask & M_SLEEP) {
+    pending_.mask &= ~M_TEMP;
+  } else if (pending_.mask & M_FAN) {
+    switch (this->fan_mode.value_or(climate::CLIMATE_FAN_AUTO)) {
+      case climate::CLIMATE_FAN_AUTO:   f[16] = CMD_FAN_AUTO;  break;
+      case climate::CLIMATE_FAN_LOW:    f[16] = CMD_FAN_LOW;   break;
+      case climate::CLIMATE_FAN_FOCUS:  f[16] = CMD_FAN_MLOW;  break;
+      case climate::CLIMATE_FAN_MEDIUM: f[16] = CMD_FAN_MED;   break;
+      case climate::CLIMATE_FAN_MIDDLE: f[16] = CMD_FAN_MHIGH; break;
+      case climate::CLIMATE_FAN_HIGH:   f[16] = CMD_FAN_HIGH;  break;
+      default:                          f[16] = CMD_FAN_AUTO;  break;
+    }
+    pending_.mask &= ~M_FAN;
+  } else if (pending_.mask & M_SWING) {
+    switch (this->swing_mode) {
+      case climate::CLIMATE_SWING_BOTH:       f[32] = CMD_SWING_BOTH;  break;
+      case climate::CLIMATE_SWING_VERTICAL:   f[32] = CMD_SWING_VERT;  break;
+      case climate::CLIMATE_SWING_HORIZONTAL: f[32] = CMD_SWING_HORIZ; break;
+      case climate::CLIMATE_SWING_OFF:
+      default:                                f[32] = CMD_SWING_OFF;   break;
+    }
+    pending_.mask &= ~M_SWING;
+  } else if (pending_.mask & M_SLEEP) {
     f[17] = pending_.sleep ? CMD_SLEEP_GENERAL : CMD_SLEEP_OFF;
-  } else {
-    f[17] = CMD_SLEEP_OFF;
+    pending_.mask &= ~M_SLEEP;
+  } else if (pending_.mask & (M_ECO | M_BOOST)) {
+    // ECO and BOOST share byte 33 — handle both together if either changed.
+    // Preserve the existing state for whichever isn't being changed right now.
+    const bool want_eco   = (pending_.mask & M_ECO)   ? pending_.eco   : false;
+    const bool want_boost = (pending_.mask & M_BOOST) ? pending_.boost : false;
+    f[33] = (want_eco ? CMD_ECO_ON : CMD_ECO_OFF)
+          | (want_boost ? CMD_BOOST_ON : CMD_BOOST_OFF);
+    pending_.mask &= ~(M_ECO | M_BOOST);
+  } else if (pending_.mask & M_QUIET) {
+    f[35] = pending_.quiet ? CMD_QUIET_ON : CMD_QUIET_OFF;
+    pending_.mask &= ~M_QUIET;
+  } else if (pending_.mask & M_DISPLAY) {
+    f[36] = pending_.display ? CMD_DISPLAY_ON : CMD_DISPLAY_OFF;
+    pending_.mask &= ~M_DISPLAY;
   }
-
-  // --- Buzzer (byte 23) ---
-  // Mute if the user has turned the beep switch OFF; otherwise beep.
-  const bool want_beep = (pending_.mask & M_BEEP) ? pending_.beep : beep_enabled_;
-  if (pending_.mask & M_BEEP) beep_enabled_ = want_beep;
-  f[23] = want_beep ? CMD_BUZZER_BEEP : CMD_BUZZER_MUTE;
+  // If pending_.mask is still non-zero after this call, loop() will send
+  // another frame on the next tick (one field at a time).
 
   write_frame_(f, sizeof(f));
 }
