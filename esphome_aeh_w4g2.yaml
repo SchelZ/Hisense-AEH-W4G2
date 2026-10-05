@@ -98,14 +98,14 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: ${flow_control_pin}
+    flow_control_pin: PA14
     indoor_temperature:
       name: "Indoor Temperature"
     outdoor_temperature:
       # Really the outdoor condenser / exhaust temp. Useful for diagnostics
       # (shows compressor load) rather than ambient outdoor temp.
       name: "Outdoor Condenser Temperature"
-
+ 
 switch:
   - platform: hisense_wings
     hisense_wings_id: hisense_climate
@@ -125,11 +125,12 @@ switch:
     sleep:
       name: "Sleep"
       icon: "mdi:sleep"
-    beep:
-      # When ON, every command the AC receives chirps once (default behaviour).
-      # When OFF, commands are sent with the "mute buzzer" flag so the AC
-      # stays silent. Equivalent to the "silent operation" switch in the
-      # Hisense app.
-      name: "Beep"
-      icon: "mdi:volume-high"
-      restore_mode: RESTORE_DEFAULT_ON
+    mute_beep:
+      # Default OFF = AC beeps normally when it receives commands.
+      # Turn ON to silence the AC's confirmation beeps (sends every command
+      # with the "mute buzzer" flag set). Equivalent to the "silent operation"
+      # switch in the Hisense app.
+      name: "Mute Beep"
+      icon: "mdi:volume-off"
+      restore_mode: RESTORE_DEFAULT_OFF
+
