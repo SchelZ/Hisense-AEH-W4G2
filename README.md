@@ -13,6 +13,8 @@
 </br>
 
 ### ! This is the circuit diagram used for flashing AEH-W4G2 Wi-Fi module !
+* I found out that using 3v3 on the ttl adaptor is getting AEH-W4G2 to enter flashing mode, and 5V is only for powering
+* You also need to have AEH-W4G2 TX pin wired to GND the moment you plug the TTL adaptor so is entering flash mode and then you have to remove AEH-W4G2 TX pin from GND and connect it to TX pin of the TTL adaptor
 <img width="1987" height="950" alt="circuit_image (1)" src="https://github.com/user-attachments/assets/5142624c-9454-4600-bd3d-05690177afc5" />
 
 
