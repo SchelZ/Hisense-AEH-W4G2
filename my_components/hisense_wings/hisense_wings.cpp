@@ -341,10 +341,9 @@ void HisenseWings::send_command_frame_() {
     0x00, 0x00                      // [44..45]
   };
 
-  // --- Buzzer (byte 23) — included in EVERY command frame ---
-  const bool want_beep = (pending_.mask & M_BEEP) ? pending_.beep : beep_enabled_;
-  if (pending_.mask & M_BEEP) beep_enabled_ = want_beep;
-  f[23] = want_beep ? CMD_BUZZER_BEEP : CMD_BUZZER_MUTE;
+  // --- Buzzer (byte 23) — persistent flag, applied to every command.
+  // Default: 0x04 (beep on receive). Mute switch flips it to 0x00.
+  f[23] = mute_beep_ ? CMD_BUZZER_MUTE : CMD_BUZZER_BEEP;
 
   // --- Pick ONE field to send this frame, in priority order ---
   // MODE first (changing mode often resets other things so it should go first)
@@ -442,13 +441,19 @@ void HisenseWings::write_frame_(const uint8_t *data, size_t len) {
 // ---------------------------------------------------------------------------
 void FeatureSwitch::write_state(bool state) {
   if (parent_ == nullptr) return;
+  // Only publish if the state actually changed — prevents feedback loops
+  // where ESPHome's state restoration or periodic refresh causes write_state
+  // to be called with the same value and re-send a redundant command.
+  if (initialized_ && state == this->state) return;
+  initialized_ = true;
+
   switch (feature_id_) {
-    case 0: parent_->set_display(state); break;
-    case 1: parent_->set_boost(state);   break;
-    case 2: parent_->set_eco(state);     break;
-    case 3: parent_->set_quiet(state);   break;
-    case 4: parent_->set_sleep(state);   break;
-    case 5: parent_->set_beep(state);    break;
+    case 0: parent_->set_display(state);   break;
+    case 1: parent_->set_boost(state);     break;
+    case 2: parent_->set_eco(state);       break;
+    case 3: parent_->set_quiet(state);     break;
+    case 4: parent_->set_sleep(state);     break;
+    case 5: parent_->set_mute_beep(state); break;
   }
   this->publish_state(state);
 }
