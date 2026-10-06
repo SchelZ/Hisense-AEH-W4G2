@@ -208,6 +208,14 @@ class HisenseWings : public Component,
   size_t rx_len_ {0};
   uint8_t last_byte_ {0};
 
+  // RX diagnostics: total bytes seen on the UART and complete CRC-valid frames
+  // decoded. If rx_bytes_total_ stays 0, nothing is arriving on the RX pin
+  // (wiring / flow-control / transceiver); if bytes climb but frames stay 0,
+  // it's a framing/parsing problem instead.
+  uint32_t rx_bytes_total_ {0};
+  uint32_t rx_frames_ok_ {0};
+  uint32_t last_diag_ms_ {0};
+
   // Pending command state. The AC rejects frames that set multiple fields
   // at once — each 0x29 command should set exactly ONE field. The mask
   // tracks which field changed since the last send.
