@@ -55,8 +55,12 @@ external_components:
     components: [hisense_wings]
  
 logger:
-  level: WARN
+  # DEBUG so the hisense_wings component's RX/TX/state lines are visible over
+  # the network API (set back to WARN once the bus is confirmed working).
+  level: DEBUG
   baud_rate: 0
+  logs:
+    hisense_wings: DEBUG
  
 ota:
   - platform: esphome
