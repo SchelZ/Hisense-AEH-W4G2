@@ -8,6 +8,8 @@
 #include "hisense_wings.h"
 #include "esphome/core/log.h"
 
+#include <string>
+
 namespace esphome {
 namespace hisense_wings {
 
@@ -17,6 +19,16 @@ static constexpr uint8_t H1 = 0xF4, H2 = 0xF5, F1 = 0xF4, F2 = 0xFB;
 
 static constexpr uint32_t POLL_INTERVAL_MS = 8000;
 static constexpr uint32_t SEND_COOLDOWN_MS = 300;
+
+// Custom fan-mode labels shown in Home Assistant. ESPHome's built-in fan
+// enum has no "medium-low"/"medium-high", so using it forced the UI to show
+// the generic names "Focus" and "Middle". Custom modes let us label the six
+// real speeds exactly as the AC exposes them.
+static const char *const FAN_LOW_STR   = "Low";
+static const char *const FAN_MLOW_STR  = "Low-Medium";
+static const char *const FAN_MED_STR   = "Medium";
+static const char *const FAN_MHIGH_STR = "Medium-High";
+static const char *const FAN_HIGH_STR  = "High";
 
 // ---------------------------------------------------------------------------
 //  Protocol constants — command byte values, derived from labeled captures.
@@ -30,6 +42,17 @@ static constexpr uint8_t CMD_MODE_HEAT     = 0x30;
 static constexpr uint8_t CMD_MODE_COOL     = 0x50;
 static constexpr uint8_t CMD_MODE_DRY      = 0x70;
 static constexpr uint8_t CMD_MODE_AUTO     = 0x90;
+
+// 0x29 byte[18] low nibble — "power-on" / apply bits. HYPOTHESIS (unverified):
+// the low nibble encodes the power transition, decoupled from the mode enum
+// in the upper nibble:
+//   0x00 = no power-state change (used to change mode WHILE already running)
+//   0x04 = power OFF   (CMD_MODE_OFF = 0x04, upper nibble ignored)
+//   0x0C = power ON / apply ("keepalive" value seen on the bus)
+// A bare 0x50 (COOL, low nibble 0) changes mode when the AC is already on but
+// is rejected from the OFF state — which matches the known power-on bug. So
+// when turning the AC on from OFF we OR in this nibble, e.g. COOL => 0x5C.
+static constexpr uint8_t CMD_MODE_POWER_ON_NIBBLE = 0x0C;
 
 // 0x29 byte[16] — fan speed command (odd values with LSB=1 confirmation bit)
 static constexpr uint8_t CMD_FAN_AUTO   = 0x01;
@@ -108,13 +131,18 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_MODE_FAN_ONLY,
       climate::CLIMATE_MODE_HEAT_COOL,  // = AUTO
   });
+  // AUTO stays a built-in mode ("Auto"); the five real speeds are custom
+  // modes so Home Assistant shows them by their proper names instead of the
+  // generic built-in labels "Focus" / "Middle".
   t.set_supported_fan_modes({
       climate::CLIMATE_FAN_AUTO,
-      climate::CLIMATE_FAN_LOW,
-      climate::CLIMATE_FAN_FOCUS,   // MED-LOW
-      climate::CLIMATE_FAN_MEDIUM,
-      climate::CLIMATE_FAN_MIDDLE,  // MED-HIGH
-      climate::CLIMATE_FAN_HIGH,
+  });
+  t.set_supported_custom_fan_modes({
+      FAN_LOW_STR,
+      FAN_MLOW_STR,
+      FAN_MED_STR,
+      FAN_MHIGH_STR,
+      FAN_HIGH_STR,
   });
   t.set_supported_swing_modes({
       climate::CLIMATE_SWING_OFF,
@@ -206,15 +234,29 @@ void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
     return;
   }
 
+  ESP_LOGD(TAG, "RX frame kind=0x%02X len=%u CRC OK", data[4], (unsigned) len);
+
   // We only decode the 0x7B full-state dump (132 bytes). Short polls and
   // response frames carry no useful state for us.
   if (len < 70 || data[4] != 0x7B) return;
+
+  ESP_LOGD(TAG, "state frame: mode=0x%02X target=%u room=%u coil=%u",
+           data[18], data[19], data[20], data[46]);
 
   // Copy into our status buffer for later reference
   const size_t copy_len = (len < sizeof(StatusFrame)) ? len : sizeof(StatusFrame);
   memcpy(&status_, data, copy_len);
   status_valid_ = true;
   publish_from_status_();
+}
+
+// ---------------------------------------------------------------------------
+//  Is the AC currently running, per the last decoded state frame?
+// ---------------------------------------------------------------------------
+bool HisenseWings::ac_running_() const {
+  if (!status_valid_) return false;
+  const uint8_t *s = reinterpret_cast<const uint8_t *>(&status_);
+  return (s[18] & STATE_MODE_RUNNING_BIT) != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,14 +289,32 @@ void HisenseWings::publish_from_status_() {
   this->current_temperature = static_cast<float>(s[20]);
 
   // --- Fan speed (byte 16, even values in state frames) ---
+  // AUTO is a built-in fan mode; the five real speeds are custom modes. Set
+  // exactly one of fan_mode / custom_fan_mode and clear the other so the UI
+  // reflects a single, unambiguous selection.
   switch (s[16]) {
-    case 0x01: this->fan_mode = climate::CLIMATE_FAN_AUTO;   break;
-    case 0x0A: this->fan_mode = climate::CLIMATE_FAN_LOW;    break;
-    case 0x0C: this->fan_mode = climate::CLIMATE_FAN_FOCUS;  break;  // ML
-    case 0x0E: this->fan_mode = climate::CLIMATE_FAN_MEDIUM; break;
-    case 0x10: this->fan_mode = climate::CLIMATE_FAN_MIDDLE; break;  // MH
-    case 0x12: this->fan_mode = climate::CLIMATE_FAN_HIGH;   break;
-    default:   this->fan_mode = climate::CLIMATE_FAN_AUTO;   break;
+    case 0x01:
+      this->fan_mode = climate::CLIMATE_FAN_AUTO; this->custom_fan_mode.reset();
+      break;
+    case 0x0A:
+      this->custom_fan_mode = std::string(FAN_LOW_STR);   this->fan_mode.reset();
+      break;
+    case 0x0C:
+      this->custom_fan_mode = std::string(FAN_MLOW_STR);  this->fan_mode.reset();
+      break;
+    case 0x0E:
+      this->custom_fan_mode = std::string(FAN_MED_STR);   this->fan_mode.reset();
+      break;
+    case 0x10:
+      this->custom_fan_mode = std::string(FAN_MHIGH_STR); this->fan_mode.reset();
+      break;
+    case 0x12:
+      this->custom_fan_mode = std::string(FAN_HIGH_STR);  this->fan_mode.reset();
+      break;
+    default:
+      // Includes the QUIET-only ultra-low value (0x02) and any unknown byte.
+      this->fan_mode = climate::CLIMATE_FAN_AUTO; this->custom_fan_mode.reset();
+      break;
   }
 
   // --- Swing (byte 35 bitfield) ---
@@ -282,6 +342,9 @@ void HisenseWings::publish_from_status_() {
 // ---------------------------------------------------------------------------
 void HisenseWings::control(const climate::ClimateCall &call) {
   if (call.get_mode().has_value()) {
+    // Remember whether this change starts from OFF so the command frame can
+    // carry the power-on nibble when waking the AC up.
+    mode_from_off_ = (this->mode == climate::CLIMATE_MODE_OFF) && !ac_running_();
     this->mode = *call.get_mode();
     pending_.mask |= M_MODE;
     dirty_ = true;
@@ -292,7 +355,16 @@ void HisenseWings::control(const climate::ClimateCall &call) {
     dirty_ = true;
   }
   if (call.get_fan_mode().has_value()) {
+    // Built-in fan mode (AUTO).
     this->fan_mode = *call.get_fan_mode();
+    this->custom_fan_mode.reset();
+    pending_.mask |= M_FAN;
+    dirty_ = true;
+  }
+  if (call.get_custom_fan_mode().has_value()) {
+    // One of our custom speed labels.
+    this->custom_fan_mode = *call.get_custom_fan_mode();
+    this->fan_mode.reset();
     pending_.mask |= M_FAN;
     dirty_ = true;
   }
@@ -301,6 +373,12 @@ void HisenseWings::control(const climate::ClimateCall &call) {
     pending_.mask |= M_SWING;
     dirty_ = true;
   }
+
+  // Reflect the requested state in Home Assistant immediately. Without this,
+  // the UI shows the request only optimistically and then snaps back to the
+  // last published state until the next 0x7B poll confirms (or contradicts)
+  // the change.
+  this->publish_state();
 }
 
 // ---------------------------------------------------------------------------
@@ -348,15 +426,25 @@ void HisenseWings::send_command_frame_() {
   // --- Pick ONE field to send this frame, in priority order ---
   // MODE first (changing mode often resets other things so it should go first)
   if (pending_.mask & M_MODE) {
+    uint8_t mode_byte;
     switch (this->mode) {
-      case climate::CLIMATE_MODE_OFF:        f[18] = CMD_MODE_OFF;      break;
-      case climate::CLIMATE_MODE_FAN_ONLY:   f[18] = CMD_MODE_FAN_ONLY; break;
-      case climate::CLIMATE_MODE_HEAT:       f[18] = CMD_MODE_HEAT;     break;
-      case climate::CLIMATE_MODE_COOL:       f[18] = CMD_MODE_COOL;     break;
-      case climate::CLIMATE_MODE_DRY:        f[18] = CMD_MODE_DRY;      break;
-      case climate::CLIMATE_MODE_HEAT_COOL:  f[18] = CMD_MODE_AUTO;     break;
-      default:                               f[18] = CMD_MODE_COOL;     break;
+      case climate::CLIMATE_MODE_OFF:        mode_byte = CMD_MODE_OFF;      break;
+      case climate::CLIMATE_MODE_FAN_ONLY:   mode_byte = CMD_MODE_FAN_ONLY; break;
+      case climate::CLIMATE_MODE_HEAT:       mode_byte = CMD_MODE_HEAT;     break;
+      case climate::CLIMATE_MODE_COOL:       mode_byte = CMD_MODE_COOL;     break;
+      case climate::CLIMATE_MODE_DRY:        mode_byte = CMD_MODE_DRY;      break;
+      case climate::CLIMATE_MODE_HEAT_COOL:  mode_byte = CMD_MODE_AUTO;     break;
+      default:                               mode_byte = CMD_MODE_COOL;     break;
     }
+    // Power-on wake: when switching from OFF into a running mode, OR in the
+    // power-on nibble (e.g. COOL 0x50 -> 0x5C). A bare mode byte is accepted
+    // only while the AC is already running; from OFF it is rejected (single
+    // beep, no power-up). Leave OFF itself (0x04) untouched.
+    if (this->mode != climate::CLIMATE_MODE_OFF && mode_from_off_) {
+      mode_byte |= CMD_MODE_POWER_ON_NIBBLE;
+    }
+    f[18] = mode_byte;
+    mode_from_off_ = false;
     pending_.mask &= ~M_MODE;
   } else if (pending_.mask & M_TEMP) {
     int t = static_cast<int>(this->target_temperature);
@@ -365,15 +453,17 @@ void HisenseWings::send_command_frame_() {
     f[19] = (static_cast<uint8_t>(t) << 1) | 1u;
     pending_.mask &= ~M_TEMP;
   } else if (pending_.mask & M_FAN) {
-    switch (this->fan_mode.value_or(climate::CLIMATE_FAN_AUTO)) {
-      case climate::CLIMATE_FAN_AUTO:   f[16] = CMD_FAN_AUTO;  break;
-      case climate::CLIMATE_FAN_LOW:    f[16] = CMD_FAN_LOW;   break;
-      case climate::CLIMATE_FAN_FOCUS:  f[16] = CMD_FAN_MLOW;  break;
-      case climate::CLIMATE_FAN_MEDIUM: f[16] = CMD_FAN_MED;   break;
-      case climate::CLIMATE_FAN_MIDDLE: f[16] = CMD_FAN_MHIGH; break;
-      case climate::CLIMATE_FAN_HIGH:   f[16] = CMD_FAN_HIGH;  break;
-      default:                          f[16] = CMD_FAN_AUTO;  break;
+    uint8_t fan_byte = CMD_FAN_AUTO;
+    if (this->custom_fan_mode.has_value()) {
+      const std::string &c = *this->custom_fan_mode;
+      if (c == FAN_LOW_STR)        fan_byte = CMD_FAN_LOW;
+      else if (c == FAN_MLOW_STR)  fan_byte = CMD_FAN_MLOW;
+      else if (c == FAN_MED_STR)   fan_byte = CMD_FAN_MED;
+      else if (c == FAN_MHIGH_STR) fan_byte = CMD_FAN_MHIGH;
+      else if (c == FAN_HIGH_STR)  fan_byte = CMD_FAN_HIGH;
     }
+    // else: fan_mode is AUTO (or unset) -> CMD_FAN_AUTO
+    f[16] = fan_byte;
     pending_.mask &= ~M_FAN;
   } else if (pending_.mask & M_SWING) {
     switch (this->swing_mode) {
@@ -405,6 +495,11 @@ void HisenseWings::send_command_frame_() {
   // If pending_.mask is still non-zero after this call, loop() will send
   // another frame on the next tick (one field at a time).
 
+  ESP_LOGD(TAG, "TX cmd: byte[16]=0x%02X byte[17]=0x%02X byte[18]=0x%02X "
+                "byte[19]=0x%02X byte[23]=0x%02X byte[32]=0x%02X "
+                "byte[33]=0x%02X byte[35]=0x%02X byte[36]=0x%02X mask_left=0x%X",
+           f[16], f[17], f[18], f[19], f[23], f[32], f[33], f[35], f[36],
+           (unsigned) pending_.mask);
   write_frame_(f, sizeof(f));
 }
 
@@ -448,7 +543,7 @@ void FeatureSwitch::write_state(bool state) {
   initialized_ = true;
 
   switch (feature_id_) {
-    case 0: parent_->set_display(state);   break;
+    case 0: parent_->set_disable_display(state); break;
     case 1: parent_->set_boost(state);     break;
     case 2: parent_->set_eco(state);       break;
     case 3: parent_->set_quiet(state);     break;
