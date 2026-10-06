@@ -8,7 +8,7 @@ from . import hisense_wings_ns, HisenseWings
 
 CONF_HISENSE_WINGS_ID = "hisense_wings_id"
 
-FEATURES = ["display", "boost", "eco", "quiet", "sleep", "mute_beep"]
+FEATURES = ["disable_display", "boost", "eco", "quiet", "sleep", "mute_beep"]
 
 FeatureSwitch = hisense_wings_ns.class_(
     "FeatureSwitch", switch.Switch, cg.Component

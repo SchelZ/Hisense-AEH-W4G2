@@ -98,7 +98,7 @@ climate:
     name: "Hisense AC"
     id: hisense_climate
     uart_id: ac_uart
-    flow_control_pin: PA14
+    flow_control_pin: ${flow_control_pin}
     indoor_temperature:
       name: "Indoor Temperature"
     outdoor_temperature:
@@ -109,10 +109,12 @@ climate:
 switch:
   - platform: hisense_wings
     hisense_wings_id: hisense_climate
-    display:
-      name: "Display"
-      icon: "mdi:numeric"
-      restore_mode: RESTORE_DEFAULT_ON
+    disable_display:
+      # Default OFF = AC's LED display stays ON (normal behaviour).
+      # Turn ON to blank the display (useful at night).
+      name: "Disable Display"
+      icon: "mdi:monitor-off"
+      restore_mode: RESTORE_DEFAULT_OFF
     boost:
       name: "Boost"
       icon: "mdi:rocket-launch"
