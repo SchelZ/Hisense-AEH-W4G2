@@ -73,11 +73,11 @@ static constexpr uint8_t CMD_SLEEP_GENERAL = 0x03;
 static constexpr uint8_t CMD_BUZZER_BEEP = 0x04;
 static constexpr uint8_t CMD_BUZZER_MUTE = 0x00;
 
-// 0x29 byte[32] — swing command. Only vertical is controllable on this unit.
+// 0x29 byte[32] — swing command.
 static constexpr uint8_t CMD_SWING_OFF    = 0x40;  // confirmed
 static constexpr uint8_t CMD_SWING_VERT   = 0xC0;  // confirmed
-// 0x70 (horizontal) and 0xF0 (both) were reference guesses; live capture shows
-// this AC ignores 0x70 and treats 0xF0 as vertical, so they are not used.
+static constexpr uint8_t CMD_SWING_HORIZ  = 0x70;  // physical H-swing (state not read back yet)
+static constexpr uint8_t CMD_SWING_BOTH   = 0xF0;  // physical both
 
 // 0x29 byte[33] — ECO (upper nibble) + BOOST (lower nibble). Can combine.
 static constexpr uint8_t CMD_ECO_OFF   = 0x10;
@@ -153,13 +153,11 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_FAN_MEDIUM,
       climate::CLIMATE_FAN_HIGH,
   });
-  // Only vertical swing is controllable over the bus on this unit. Live
-  // captures showed the horizontal (0x70) command is ignored and both (0xF0)
-  // just does vertical, so those options are not offered (they were never
-  // verified values).
   t.set_supported_swing_modes({
       climate::CLIMATE_SWING_OFF,
       climate::CLIMATE_SWING_VERTICAL,
+      climate::CLIMATE_SWING_HORIZONTAL,
+      climate::CLIMATE_SWING_BOTH,
   });
   // ESPHome 2026.9 declares current-temperature support via a feature flag;
   // without it the climate entity never shows a current temperature (the
@@ -289,10 +287,9 @@ void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
   // handshake/ack replies carry no state for us.
   if (len < 70 || data[2] != 0x01) return;
 
-  // Raw dump of the state frame's leading bytes so the field offsets can be
-  // verified/corrected against the real 160-byte layout.
-  ESP_LOGD(TAG, "state raw[0..47]: %s",
-           format_hex_pretty(data, len < 48 ? len : 48).c_str());
+  // Full raw dump of the state frame so remaining fields (e.g. where this AC
+  // reports horizontal swing) can be located by diffing known-state captures.
+  ESP_LOGD(TAG, "state raw: %s", format_hex_pretty(data, len).c_str());
   ESP_LOGD(TAG, "state frame: mode=0x%02X target=%u room=%u coil=%u",
            data[18], data[19], data[20], data[46]);
 
@@ -367,13 +364,17 @@ void HisenseWings::publish_from_status_() {
   }
 
   // --- Swing (byte 35 bitfield) ---
-  // On this unit's 160-byte frame, bit 0x40 is high at baseline (not
-  // horizontal swing), which previously made the entity report HORIZONTAL
-  // permanently. Only bit 0x80 (vertical swing) is trusted for now; H-swing
-  // readback is disabled until captured with swing toggled on/off.
+  // Vertical swing is the only state reliably encoded here (bit 0x80; bit 0x40
+  // is high at baseline). Horizontal/both ARE commandable (the louvers move),
+  // but where the AC reports them in the 160-byte frame isn't mapped yet, so
+  // don't clobber a user-selected HORIZONTAL/BOTH back to OFF on each poll.
   const uint8_t feat_a = s[35];
-  this->swing_mode = (feat_a & STATE_FEAT_V_SWING) ? climate::CLIMATE_SWING_VERTICAL
-                                                   : climate::CLIMATE_SWING_OFF;
+  if (feat_a & STATE_FEAT_V_SWING) {
+    this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
+  } else if (this->swing_mode != climate::CLIMATE_SWING_HORIZONTAL &&
+             this->swing_mode != climate::CLIMATE_SWING_BOTH) {
+    this->swing_mode = climate::CLIMATE_SWING_OFF;
+  }
 
   this->publish_state();
 
@@ -560,10 +561,13 @@ void HisenseWings::send_command_frame_() {
     f[16] = fan_byte;
     pending_.mask &= ~M_FAN;
   } else if (pending_.mask & M_SWING) {
-    // Only vertical swing works on this AC (horizontal/both commands are
-    // ignored or aliased to vertical — confirmed by capture).
-    f[32] = (this->swing_mode == climate::CLIMATE_SWING_VERTICAL) ? CMD_SWING_VERT
-                                                                  : CMD_SWING_OFF;
+    switch (this->swing_mode) {
+      case climate::CLIMATE_SWING_BOTH:       f[32] = CMD_SWING_BOTH;  break;
+      case climate::CLIMATE_SWING_VERTICAL:   f[32] = CMD_SWING_VERT;  break;
+      case climate::CLIMATE_SWING_HORIZONTAL: f[32] = CMD_SWING_HORIZ; break;
+      case climate::CLIMATE_SWING_OFF:
+      default:                                f[32] = CMD_SWING_OFF;   break;
+    }
     pending_.mask &= ~M_SWING;
   } else if (pending_.mask & M_SLEEP) {
     f[17] = pending_.sleep ? CMD_SLEEP_GENERAL : CMD_SLEEP_OFF;
