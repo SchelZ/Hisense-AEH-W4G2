@@ -179,8 +179,19 @@ void HisenseWings::loop() {
   // is talking to us at all.
   if (now - last_diag_ms_ > 5000) {
     last_diag_ms_ = now;
-    ESP_LOGD(TAG, "diag: rx_bytes_total=%u rx_frames_ok=%u uart_avail=%d status_valid=%d",
-             rx_bytes_total_, rx_frames_ok_, this->available(), status_valid_ ? 1 : 0);
+    ESP_LOGD(TAG, "diag: rx_bytes_total=%u rx_frames_ok=%u uart_avail=%d status_valid=%d init_done=%d",
+             rx_bytes_total_, rx_frames_ok_, this->available(), status_valid_ ? 1 : 0,
+             init_done_ ? 1 : 0);
+  }
+
+  // Boot handshake first — the AC won't stream state frames until the module
+  // has introduced itself. One step per second until the sequence is done.
+  if (!init_done_) {
+    if (now - last_init_ms_ > 1000) {
+      send_init_step_();
+      last_init_ms_ = now;
+    }
+    return;
   }
 
   // Keep sending while there are pending changes. Each call to
@@ -197,47 +208,51 @@ void HisenseWings::loop() {
 }
 
 // ---------------------------------------------------------------------------
-//  RX byte stream: look for F4 F5 ... F4 FB frames
+//  RX byte stream. Frames are F4 F5 <dir> 40 <len> ... <crc_hi> <crc_lo> F4 FB,
+//  where byte[4] is the payload length and the total frame size is len+9.
+//  Using that explicit length (rather than scanning for the F4 FB footer) is
+//  robust against F4 FB byte pairs that occur inside a frame's payload — the
+//  132-byte 0x7B state frame in particular.
 // ---------------------------------------------------------------------------
 void HisenseWings::process_byte_(uint8_t b) {
   rx_bytes_total_++;
-  // State machine: accumulate bytes starting at F4 F5, end at F4 FB
+
   if (rx_len_ == 0) {
-    if (b == H1) {
-      rx_buf_[0] = b;
-      rx_len_ = 1;
-    }
-    last_byte_ = b;
+    if (b == H1) { rx_buf_[0] = b; rx_len_ = 1; }
     return;
   }
   if (rx_len_ == 1) {
-    if (b == H2) {
-      rx_buf_[1] = b;
-      rx_len_ = 2;
-    } else {
+    if (b == H2)      { rx_buf_[1] = b; rx_len_ = 2; }  // got F4 F5
+    else if (b == H1) { rx_buf_[0] = b; rx_len_ = 1; }  // F4 F4 — treat as new start
+    else              { rx_len_ = 0; }                  // not a header; resync
+    return;
+  }
+
+  if (rx_len_ >= RX_MAX) {  // safety; should never hit given the length check
+    rx_len_ = 0;
+    return;
+  }
+  rx_buf_[rx_len_++] = b;
+
+  // Once the length byte (index 4) is in, we know the full frame size.
+  if (rx_len_ >= 5) {
+    const size_t expected = static_cast<size_t>(rx_buf_[4]) + 9;
+    if (expected < 6 || expected > RX_MAX) {
+      // Implausible length — drop and resync on the next F4 F5.
+      ESP_LOGV(TAG, "RX implausible len byte=0x%02X; resync", rx_buf_[4]);
+      rx_len_ = 0;
+      return;
+    }
+    if (rx_len_ == expected) {
+      if (rx_buf_[rx_len_ - 2] == F1 && rx_buf_[rx_len_ - 1] == F2 &&
+          frame_crc_ok_(rx_buf_, rx_len_)) {
+        handle_frame_(rx_buf_, rx_len_);
+      } else {
+        ESP_LOGV(TAG, "RX frame footer/CRC bad (len=%u)", (unsigned) rx_len_);
+      }
       rx_len_ = 0;
     }
-    last_byte_ = b;
-    return;
   }
-  // Mid-frame: accumulate, then accept an F4 FB footer ONLY when the CRC
-  // checks out. The 132-byte 0x7B state frame can contain an F4 FB byte pair
-  // inside its payload; treating the first F4 FB as the footer would truncate
-  // the frame and fail CRC, dropping every state frame. By requiring a valid
-  // CRC we skip false footers and keep accumulating to the real one.
-  if (rx_len_ < RX_MAX) {
-    rx_buf_[rx_len_++] = b;
-  } else {
-    // Overflow — resync
-    rx_len_ = 0;
-    last_byte_ = b;
-    return;
-  }
-  if (last_byte_ == F1 && b == F2 && frame_crc_ok_(rx_buf_, rx_len_)) {
-    handle_frame_(rx_buf_, rx_len_);
-    rx_len_ = 0;
-  }
-  last_byte_ = b;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +419,42 @@ void HisenseWings::control(const climate::ClimateCall &call) {
   // last published state until the next 0x7B poll confirms (or contradicts)
   // the change.
   this->publish_state();
+}
+
+// ---------------------------------------------------------------------------
+//  Boot handshake. The AC control board only begins streaming 0x7B state
+//  frames after the module announces itself with this sequence: three 0x0B
+//  init frames followed by a 0x13 wifi-status frame. Byte values (and their
+//  CRCs, which our summation reproduces) are taken from a working capture of
+//  the kadam12g reference firmware. Payloads below omit the trailing CRC +
+//  F4 FB footer, which write_frame_() appends.
+// ---------------------------------------------------------------------------
+void HisenseWings::send_init_step_() {
+  static const uint8_t init1[16] = {
+    0xF4, 0xF5, 0x00, 0x40, 0x0B, 0x00, 0x00, 0x00,
+    0x00, 0xFE, 0x01, 0x00, 0x00, 0x0A, 0x04, 0x00};
+  static const uint8_t init2[16] = {
+    0xF4, 0xF5, 0x00, 0x40, 0x0B, 0x00, 0x00, 0x01,
+    0x01, 0xFE, 0x01, 0x00, 0x00, 0x07, 0x01, 0x00};
+  static const uint8_t init3[16] = {
+    0xF4, 0xF5, 0x00, 0x40, 0x0B, 0x00, 0x00, 0x01,
+    0x01, 0xFE, 0x01, 0x00, 0x00, 0x66, 0x40, 0x00};
+  static const uint8_t wifi[24] = {
+    0xF4, 0xF5, 0x00, 0x40, 0x13, 0x00, 0x00, 0x01,
+    0x01, 0xFE, 0x01, 0x00, 0x00, 0x1E, 0x00, 0x00,
+    0x80, 0x80, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+  switch (init_step_) {
+    case 0: ESP_LOGD(TAG, "init 1/4 (0x0B)"); write_frame_(init1, sizeof(init1)); break;
+    case 1: ESP_LOGD(TAG, "init 2/4 (0x0B)"); write_frame_(init2, sizeof(init2)); break;
+    case 2: ESP_LOGD(TAG, "init 3/4 (0x0B)"); write_frame_(init3, sizeof(init3)); break;
+    case 3: ESP_LOGD(TAG, "init 4/4 (0x13 wifi-status)"); write_frame_(wifi, sizeof(wifi)); break;
+    default: break;
+  }
+  if (++init_step_ > 3) {
+    init_done_ = true;
+    ESP_LOGD(TAG, "init handshake complete; starting status polls");
+  }
 }
 
 // ---------------------------------------------------------------------------

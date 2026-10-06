@@ -182,6 +182,7 @@ class HisenseWings : public Component,
   // ---- Outgoing frame construction ----
   void send_status_request_();
   void send_command_frame_();
+  void send_init_step_();          // boot handshake the AC expects before it replies
   uint16_t crc16_(const uint8_t *data, size_t len) const;
   void write_frame_(const uint8_t *data, size_t len);
 
@@ -206,7 +207,6 @@ class HisenseWings : public Component,
   static constexpr size_t RX_MAX = 160;
   uint8_t rx_buf_[RX_MAX] {};
   size_t rx_len_ {0};
-  uint8_t last_byte_ {0};
 
   // RX diagnostics: total bytes seen on the UART and complete CRC-valid frames
   // decoded. If rx_bytes_total_ stays 0, nothing is arriving on the RX pin
@@ -242,6 +242,14 @@ class HisenseWings : public Component,
   // Set in control() when a mode change starts from the OFF state, so the
   // next command frame can carry the power-on nibble (see send_command_frame_).
   bool mode_from_off_ {false};
+
+  // Boot handshake: the AC control board only starts streaming 0x7B state
+  // frames once the module has announced itself with a short init sequence
+  // (three 0x0B frames + a 0x13 wifi-status frame). Until init_done_ is set we
+  // walk those steps instead of polling.
+  bool init_done_ {false};
+  uint8_t init_step_ {0};
+  uint32_t last_init_ms_ {0};
 
   // Mute-beep is NOT a pending change — it's a persistent per-command flag
   // applied to every outgoing command. Default OFF = AC beeps normally.
