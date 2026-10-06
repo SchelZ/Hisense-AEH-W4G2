@@ -4,7 +4,6 @@ substitutions:
   friendly_name: "AEH-W4G2 AC"
 
   # Platform
-  platform_url: "https://github.com/libretiny-eu/libretiny.git#v1.13.0"
   arduino_api_url: "https://github.com/hn/ArduinoCore-API#RingBufferFix"
   board: "generic-rtl8710bn-2mb-468k"
 
@@ -29,7 +28,11 @@ esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   platformio_options:
-    platform: ${platform_url}
+    # NOTE: do NOT pin a specific libretiny platform version here. The working
+    # kadam12g and pio2398 configs rely on ESPHome's bundled LibreTiny plus only
+    # the RingBufferFix framework fork. Pinning libretiny v1.13.0 was paired with
+    # a UART that transmits but never receives (uart_avail stays 0); letting
+    # ESPHome pick the platform restores RX.
     platform_packages:
       - framework-arduino-api @ ${arduino_api_url}
     build_flags:
