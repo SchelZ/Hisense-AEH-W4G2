@@ -163,7 +163,8 @@ class HisenseWings : public Component,
   void set_indoor_pipe_temperature_sensor(sensor::Sensor *s) { s_indoor_pipe_ = s; }
 
   // Feature toggles (called from YAML lambdas)
-  void set_display(bool on)   { pending_.display = on ? 1 : 0; pending_.mask |= M_DISPLAY; dirty_ = true; }
+  // Switch ON = display OFF, Switch OFF = display ON. Default (OFF) = display on.
+  void set_disable_display(bool on) { pending_.display = on ? 0 : 1; pending_.mask |= M_DISPLAY; dirty_ = true; }
   void set_boost(bool on)     { pending_.boost = on ? 1 : 0;   pending_.mask |= M_BOOST;   dirty_ = true; }
   void set_eco(bool on)       { pending_.eco = on ? 1 : 0;     pending_.mask |= M_ECO;     dirty_ = true; }
   void set_quiet(bool on)     { pending_.quiet = on ? 1 : 0;   pending_.mask |= M_QUIET;   dirty_ = true; }
