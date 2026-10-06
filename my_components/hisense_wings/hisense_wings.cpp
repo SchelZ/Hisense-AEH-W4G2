@@ -73,11 +73,11 @@ static constexpr uint8_t CMD_SLEEP_GENERAL = 0x03;
 static constexpr uint8_t CMD_BUZZER_BEEP = 0x04;
 static constexpr uint8_t CMD_BUZZER_MUTE = 0x00;
 
-// 0x29 byte[32] — swing command (confirmed: V. H and BOTH inferred.)
+// 0x29 byte[32] — swing command. Only vertical is controllable on this unit.
 static constexpr uint8_t CMD_SWING_OFF    = 0x40;  // confirmed
 static constexpr uint8_t CMD_SWING_VERT   = 0xC0;  // confirmed
-static constexpr uint8_t CMD_SWING_HORIZ  = 0x70;  // from reference, unverified
-static constexpr uint8_t CMD_SWING_BOTH   = 0xF0;  // from reference, unverified
+// 0x70 (horizontal) and 0xF0 (both) were reference guesses; live capture shows
+// this AC ignores 0x70 and treats 0xF0 as vertical, so they are not used.
 
 // 0x29 byte[33] — ECO (upper nibble) + BOOST (lower nibble). Can combine.
 static constexpr uint8_t CMD_ECO_OFF   = 0x10;
@@ -153,11 +153,13 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_FAN_MEDIUM,
       climate::CLIMATE_FAN_HIGH,
   });
+  // Only vertical swing is controllable over the bus on this unit. Live
+  // captures showed the horizontal (0x70) command is ignored and both (0xF0)
+  // just does vertical, so those options are not offered (they were never
+  // verified values).
   t.set_supported_swing_modes({
       climate::CLIMATE_SWING_OFF,
       climate::CLIMATE_SWING_VERTICAL,
-      climate::CLIMATE_SWING_HORIZONTAL,
-      climate::CLIMATE_SWING_BOTH,
   });
   // ESPHome 2026.9 declares current-temperature support via a feature flag;
   // without it the climate entity never shows a current temperature (the
@@ -558,13 +560,10 @@ void HisenseWings::send_command_frame_() {
     f[16] = fan_byte;
     pending_.mask &= ~M_FAN;
   } else if (pending_.mask & M_SWING) {
-    switch (this->swing_mode) {
-      case climate::CLIMATE_SWING_BOTH:       f[32] = CMD_SWING_BOTH;  break;
-      case climate::CLIMATE_SWING_VERTICAL:   f[32] = CMD_SWING_VERT;  break;
-      case climate::CLIMATE_SWING_HORIZONTAL: f[32] = CMD_SWING_HORIZ; break;
-      case climate::CLIMATE_SWING_OFF:
-      default:                                f[32] = CMD_SWING_OFF;   break;
-    }
+    // Only vertical swing works on this AC (horizontal/both commands are
+    // ignored or aliased to vertical — confirmed by capture).
+    f[32] = (this->swing_mode == climate::CLIMATE_SWING_VERTICAL) ? CMD_SWING_VERT
+                                                                  : CMD_SWING_OFF;
     pending_.mask &= ~M_SWING;
   } else if (pending_.mask & M_SLEEP) {
     f[17] = pending_.sleep ? CMD_SLEEP_GENERAL : CMD_SLEEP_OFF;
