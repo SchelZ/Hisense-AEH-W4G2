@@ -206,9 +206,14 @@ void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
     return;
   }
 
+  ESP_LOGD(TAG, "RX frame kind=0x%02X len=%u CRC OK", data[4], (unsigned) len);
+
   // We only decode the 0x7B full-state dump (132 bytes). Short polls and
   // response frames carry no useful state for us.
   if (len < 70 || data[4] != 0x7B) return;
+
+  ESP_LOGD(TAG, "state frame: mode=0x%02X target=%u room=%u coil=%u",
+           data[18], data[19], data[20], data[46]);
 
   // Copy into our status buffer for later reference
   const size_t copy_len = (len < sizeof(StatusFrame)) ? len : sizeof(StatusFrame);
@@ -405,6 +410,11 @@ void HisenseWings::send_command_frame_() {
   // If pending_.mask is still non-zero after this call, loop() will send
   // another frame on the next tick (one field at a time).
 
+  ESP_LOGD(TAG, "TX cmd: byte[16]=0x%02X byte[17]=0x%02X byte[18]=0x%02X "
+                "byte[19]=0x%02X byte[23]=0x%02X byte[32]=0x%02X "
+                "byte[33]=0x%02X byte[35]=0x%02X byte[36]=0x%02X mask_left=0x%X",
+           f[16], f[17], f[18], f[19], f[23], f[32], f[33], f[35], f[36],
+           (unsigned) pending_.mask);
   write_frame_(f, sizeof(f));
 }
 
@@ -448,7 +458,7 @@ void FeatureSwitch::write_state(bool state) {
   initialized_ = true;
 
   switch (feature_id_) {
-    case 0: parent_->set_display(state);   break;
+    case 0: parent_->set_disable_display(state); break;
     case 1: parent_->set_boost(state);     break;
     case 2: parent_->set_eco(state);       break;
     case 3: parent_->set_quiet(state);     break;
