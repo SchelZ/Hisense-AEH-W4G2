@@ -141,7 +141,7 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_MODE_HEAT,
       climate::CLIMATE_MODE_DRY,
       climate::CLIMATE_MODE_FAN_ONLY,
-      climate::CLIMATE_MODE_HEAT_COOL,  // = AUTO
+      climate::CLIMATE_MODE_AUTO,  // the AC's AUTO mode (shown as "Auto" in HA)
   });
   // AUTO/LOW/MEDIUM/HIGH are built-in modes (rendered "Auto"/"Low"/"Medium"/
   // "High"); the two in-between speeds are registered as custom modes on the
@@ -175,6 +175,14 @@ void HisenseWings::loop() {
 
   const uint32_t now = millis();
 
+  // Periodic RX diagnostic (every 5 s). Tells us at a glance whether the AC
+  // is talking to us at all.
+  if (now - last_diag_ms_ > 5000) {
+    last_diag_ms_ = now;
+    ESP_LOGD(TAG, "diag: rx_bytes_total=%u rx_frames_ok=%u uart_avail=%d status_valid=%d",
+             rx_bytes_total_, rx_frames_ok_, this->available(), status_valid_ ? 1 : 0);
+  }
+
   // Keep sending while there are pending changes. Each call to
   // send_command_frame_() sets ONE field and clears its mask bit.
   // We throttle by SEND_COOLDOWN_MS so successive beeps don't overlap.
@@ -192,6 +200,7 @@ void HisenseWings::loop() {
 //  RX byte stream: look for F4 F5 ... F4 FB frames
 // ---------------------------------------------------------------------------
 void HisenseWings::process_byte_(uint8_t b) {
+  rx_bytes_total_++;
   // State machine: accumulate bytes starting at F4 F5, end at F4 FB
   if (rx_len_ == 0) {
     if (b == H1) {
@@ -251,6 +260,7 @@ void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
     return;
   }
 
+  rx_frames_ok_++;
   ESP_LOGD(TAG, "RX frame kind=0x%02X len=%u CRC OK", data[4], (unsigned) len);
 
   // We only decode the 0x7B full-state dump (132 bytes). Short polls and
@@ -295,8 +305,8 @@ void HisenseWings::publish_from_status_() {
       case 1: this->mode = climate::CLIMATE_MODE_HEAT;      break;
       case 2: this->mode = climate::CLIMATE_MODE_COOL;      break;
       case 3: this->mode = climate::CLIMATE_MODE_DRY;       break;
-      case 4: this->mode = climate::CLIMATE_MODE_HEAT_COOL; break;  // AUTO
-      case 7: this->mode = climate::CLIMATE_MODE_HEAT_COOL; break;  // AUTO cool-sub
+      case 4: this->mode = climate::CLIMATE_MODE_AUTO; break;  // AUTO
+      case 7: this->mode = climate::CLIMATE_MODE_AUTO; break;  // AUTO cool-sub
       default: this->mode = climate::CLIMATE_MODE_OFF;      break;
     }
   }
@@ -404,6 +414,7 @@ void HisenseWings::send_status_request_() {
     0xF4, 0xF5, 0x00, 0x40, 0x0C, 0x00, 0x00, 0x01, 0x01,
     0xFE, 0x01, 0x00, 0x00, 0x66, 0x00, 0x00, 0x00
   };
+  ESP_LOGD(TAG, "TX poll 0x0C (expecting a 0x7B state frame back)");
   write_frame_(frame, sizeof(frame));
 }
 
@@ -448,7 +459,7 @@ void HisenseWings::send_command_frame_() {
       case climate::CLIMATE_MODE_HEAT:       mode_byte = CMD_MODE_HEAT;     break;
       case climate::CLIMATE_MODE_COOL:       mode_byte = CMD_MODE_COOL;     break;
       case climate::CLIMATE_MODE_DRY:        mode_byte = CMD_MODE_DRY;      break;
-      case climate::CLIMATE_MODE_HEAT_COOL:  mode_byte = CMD_MODE_AUTO;     break;
+      case climate::CLIMATE_MODE_AUTO:       mode_byte = CMD_MODE_AUTO;     break;
       default:                               mode_byte = CMD_MODE_COOL;     break;
     }
     // Power-on wake: when switching from OFF into a running mode, OR in the
