@@ -184,6 +184,11 @@ class HisenseWings : public Component,
   uint16_t crc16_(const uint8_t *data, size_t len) const;
   void write_frame_(const uint8_t *data, size_t len);
 
+  // True when the last decoded state frame shows the AC running (byte 18
+  // bit 3). Used to decide whether a mode command needs the "power-on"
+  // nibble. Returns false when we have never decoded a state frame.
+  bool ac_running_() const;
+
   // ---- UART flow control (RS-485 DE/RE pin) ----
   void flow_tx_() { if (flow_control_pin_ != nullptr) flow_control_pin_->digital_write(true); }
   void flow_rx_() { if (flow_control_pin_ != nullptr) flow_control_pin_->digital_write(false); }
@@ -192,8 +197,12 @@ class HisenseWings : public Component,
   StatusFrame status_ {};      // last decoded frame from AC
   bool status_valid_ {false};
 
-  // RX byte-stream state machine (no dynamic allocation)
-  static constexpr size_t RX_MAX = 64;
+  // RX byte-stream state machine (no dynamic allocation).
+  // RX_MAX must be large enough for the biggest frame we parse: the 0x7B
+  // full-state dump is 132 bytes. A smaller buffer silently drops every
+  // state frame (overflow-reset), so the climate entity never gets real
+  // state back and the HA UI reverts to defaults.
+  static constexpr size_t RX_MAX = 160;
   uint8_t rx_buf_[RX_MAX] {};
   size_t rx_len_ {0};
   uint8_t last_byte_ {0};
@@ -220,6 +229,10 @@ class HisenseWings : public Component,
     uint8_t quiet   : 1;
     uint8_t sleep   : 1;
   } pending_ {};
+
+  // Set in control() when a mode change starts from the OFF state, so the
+  // next command frame can carry the power-on nibble (see send_command_frame_).
+  bool mode_from_off_ {false};
 
   // Mute-beep is NOT a pending change — it's a persistent per-command flag
   // applied to every outgoing command. Default OFF = AC beeps normally.
