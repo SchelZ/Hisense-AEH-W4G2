@@ -127,6 +127,7 @@ void HisenseWings::setup() {
 
   this->mode = climate::CLIMATE_MODE_OFF;
   this->target_temperature = 24.0f;
+  this->fan_mode = climate::CLIMATE_FAN_AUTO;  // defined default until a state frame arrives
   this->publish_state();
 }
 
@@ -209,16 +210,20 @@ void HisenseWings::process_byte_(uint8_t b) {
     last_byte_ = b;
     return;
   }
-  // Mid-frame: watch for F4 FB footer
+  // Mid-frame: accumulate, then accept an F4 FB footer ONLY when the CRC
+  // checks out. The 132-byte 0x7B state frame can contain an F4 FB byte pair
+  // inside its payload; treating the first F4 FB as the footer would truncate
+  // the frame and fail CRC, dropping every state frame. By requiring a valid
+  // CRC we skip false footers and keep accumulating to the real one.
   if (rx_len_ < RX_MAX) {
     rx_buf_[rx_len_++] = b;
   } else {
-    // Overflow — reset
+    // Overflow — resync
     rx_len_ = 0;
     last_byte_ = b;
     return;
   }
-  if (last_byte_ == F1 && b == F2) {
+  if (last_byte_ == F1 && b == F2 && frame_crc_ok_(rx_buf_, rx_len_)) {
     handle_frame_(rx_buf_, rx_len_);
     rx_len_ = 0;
   }
@@ -226,17 +231,22 @@ void HisenseWings::process_byte_(uint8_t b) {
 }
 
 // ---------------------------------------------------------------------------
+//  CRC check: sum of bytes[2 .. len-4] vs the big-endian value at [len-4..len-3]
+// ---------------------------------------------------------------------------
+bool HisenseWings::frame_crc_ok_(const uint8_t *data, size_t len) const {
+  if (len < 6) return false;
+  uint16_t calc = 0;
+  for (size_t i = 2; i < len - 4; ++i) calc += data[i];
+  const uint16_t recv = (static_cast<uint16_t>(data[len - 4]) << 8) | data[len - 3];
+  return (calc & 0xFFFF) == recv;
+}
+
+// ---------------------------------------------------------------------------
 //  Received a complete frame — decode and publish
 // ---------------------------------------------------------------------------
 void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
-  if (len < 6) return;
-
-  // Verify CRC: sum of bytes[2 .. len-4], stored big-endian at [len-4],[len-3]
-  uint16_t calc = 0;
-  for (size_t i = 2; i < len - 4; ++i) calc += data[i];
-  uint16_t recv = (static_cast<uint16_t>(data[len - 4]) << 8) | data[len - 3];
-  if ((calc & 0xFFFF) != recv) {
-    ESP_LOGV(TAG, "frame CRC mismatch calc=%04X recv=%04X", calc & 0xFFFF, recv);
+  if (!frame_crc_ok_(data, len)) {
+    ESP_LOGV(TAG, "frame CRC mismatch (len=%u)", (unsigned) len);
     return;
   }
 

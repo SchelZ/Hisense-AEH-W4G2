@@ -176,6 +176,7 @@ class HisenseWings : public Component,
   // ---- Incoming frame handling ----
   void process_byte_(uint8_t b);
   void handle_frame_(const uint8_t *data, size_t len);
+  bool frame_crc_ok_(const uint8_t *data, size_t len) const;
   void publish_from_status_();
 
   // ---- Outgoing frame construction ----
