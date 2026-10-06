@@ -159,9 +159,10 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_SWING_HORIZONTAL,
       climate::CLIMATE_SWING_BOTH,
   });
-  // Note: set_supports_current_temperature() was removed in newer ESPHome;
-  // current_temperature is published implicitly whenever we call publish_state()
-  // after assigning this->current_temperature.
+  // ESPHome 2026.9 declares current-temperature support via a feature flag;
+  // without it the climate entity never shows a current temperature (the
+  // Indoor Temperature sensor still works, but the card reads 0.00).
+  t.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
   return t;
 }
 
@@ -364,13 +365,13 @@ void HisenseWings::publish_from_status_() {
   }
 
   // --- Swing (byte 35 bitfield) ---
+  // On this unit's 160-byte frame, bit 0x40 is high at baseline (not
+  // horizontal swing), which previously made the entity report HORIZONTAL
+  // permanently. Only bit 0x80 (vertical swing) is trusted for now; H-swing
+  // readback is disabled until captured with swing toggled on/off.
   const uint8_t feat_a = s[35];
-  const bool v_sw = (feat_a & STATE_FEAT_V_SWING) != 0;
-  const bool h_sw = (feat_a & STATE_FEAT_H_SWING) != 0;
-  if (v_sw && h_sw)      this->swing_mode = climate::CLIMATE_SWING_BOTH;
-  else if (v_sw)         this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
-  else if (h_sw)         this->swing_mode = climate::CLIMATE_SWING_HORIZONTAL;
-  else                   this->swing_mode = climate::CLIMATE_SWING_OFF;
+  this->swing_mode = (feat_a & STATE_FEAT_V_SWING) ? climate::CLIMATE_SWING_VERTICAL
+                                                   : climate::CLIMATE_SWING_OFF;
 
   this->publish_state();
 
