@@ -7,8 +7,7 @@
 
 #include "hisense_wings.h"
 #include "esphome/core/log.h"
-
-#include <string>
+#include "esphome/core/string_ref.h"
 
 namespace esphome {
 namespace hisense_wings {
@@ -113,6 +112,19 @@ void HisenseWings::setup() {
     flow_control_pin_->setup();
     flow_control_pin_->digital_write(false);  // start in RX mode
   }
+  // Register the custom fan-speed labels on the entity. In ESPHome 2026.9
+  // this is the primary source find_custom_fan_mode_() searches (and
+  // get_traits() merges it for the frontend), so set_custom_fan_mode_()
+  // below will accept these strings. The const char* literals have static
+  // storage, so the stored pointers stay valid for the entity's lifetime.
+  this->set_supported_custom_fan_modes({
+      FAN_LOW_STR,
+      FAN_MLOW_STR,
+      FAN_MED_STR,
+      FAN_MHIGH_STR,
+      FAN_HIGH_STR,
+  });
+
   this->mode = climate::CLIMATE_MODE_OFF;
   this->target_temperature = 24.0f;
   this->publish_state();
@@ -131,18 +143,12 @@ climate::ClimateTraits HisenseWings::traits() {
       climate::CLIMATE_MODE_FAN_ONLY,
       climate::CLIMATE_MODE_HEAT_COOL,  // = AUTO
   });
-  // AUTO stays a built-in mode ("Auto"); the five real speeds are custom
-  // modes so Home Assistant shows them by their proper names instead of the
-  // generic built-in labels "Focus" / "Middle".
+  // AUTO stays a built-in mode ("Auto"); the five real speeds are registered
+  // as custom modes on the entity (see setup()), which get_traits() merges in
+  // so Home Assistant shows them by their proper names instead of the generic
+  // built-in labels "Focus" / "Middle".
   t.set_supported_fan_modes({
       climate::CLIMATE_FAN_AUTO,
-  });
-  t.set_supported_custom_fan_modes({
-      FAN_LOW_STR,
-      FAN_MLOW_STR,
-      FAN_MED_STR,
-      FAN_MHIGH_STR,
-      FAN_HIGH_STR,
   });
   t.set_supported_swing_modes({
       climate::CLIMATE_SWING_OFF,
@@ -292,28 +298,20 @@ void HisenseWings::publish_from_status_() {
   // AUTO is a built-in fan mode; the five real speeds are custom modes. Set
   // exactly one of fan_mode / custom_fan_mode and clear the other so the UI
   // reflects a single, unambiguous selection.
+  // set_custom_fan_mode_() resets fan_mode internally; for AUTO we clear the
+  // custom slot and set the built-in mode. Exactly one is active at a time.
   switch (s[16]) {
     case 0x01:
-      this->fan_mode = climate::CLIMATE_FAN_AUTO; this->custom_fan_mode.reset();
+      this->clear_custom_fan_mode_(); this->fan_mode = climate::CLIMATE_FAN_AUTO;
       break;
-    case 0x0A:
-      this->custom_fan_mode = std::string(FAN_LOW_STR);   this->fan_mode.reset();
-      break;
-    case 0x0C:
-      this->custom_fan_mode = std::string(FAN_MLOW_STR);  this->fan_mode.reset();
-      break;
-    case 0x0E:
-      this->custom_fan_mode = std::string(FAN_MED_STR);   this->fan_mode.reset();
-      break;
-    case 0x10:
-      this->custom_fan_mode = std::string(FAN_MHIGH_STR); this->fan_mode.reset();
-      break;
-    case 0x12:
-      this->custom_fan_mode = std::string(FAN_HIGH_STR);  this->fan_mode.reset();
-      break;
+    case 0x0A: this->set_custom_fan_mode_(FAN_LOW_STR);   break;
+    case 0x0C: this->set_custom_fan_mode_(FAN_MLOW_STR);  break;
+    case 0x0E: this->set_custom_fan_mode_(FAN_MED_STR);   break;
+    case 0x10: this->set_custom_fan_mode_(FAN_MHIGH_STR); break;
+    case 0x12: this->set_custom_fan_mode_(FAN_HIGH_STR);  break;
     default:
       // Includes the QUIET-only ultra-low value (0x02) and any unknown byte.
-      this->fan_mode = climate::CLIMATE_FAN_AUTO; this->custom_fan_mode.reset();
+      this->clear_custom_fan_mode_(); this->fan_mode = climate::CLIMATE_FAN_AUTO;
       break;
   }
 
@@ -356,15 +354,16 @@ void HisenseWings::control(const climate::ClimateCall &call) {
   }
   if (call.get_fan_mode().has_value()) {
     // Built-in fan mode (AUTO).
+    this->clear_custom_fan_mode_();
     this->fan_mode = *call.get_fan_mode();
-    this->custom_fan_mode.reset();
     pending_.mask |= M_FAN;
     dirty_ = true;
   }
-  if (call.get_custom_fan_mode().has_value()) {
-    // One of our custom speed labels.
-    this->custom_fan_mode = *call.get_custom_fan_mode();
-    this->fan_mode.reset();
+  const StringRef custom_fan = call.get_custom_fan_mode();
+  if (!custom_fan.empty()) {
+    // One of our custom speed labels. set_custom_fan_mode_() resets fan_mode.
+    // Use the explicit-length overload so no null terminator is assumed.
+    this->set_custom_fan_mode_(custom_fan.c_str(), custom_fan.size());
     pending_.mask |= M_FAN;
     dirty_ = true;
   }
@@ -454,13 +453,13 @@ void HisenseWings::send_command_frame_() {
     pending_.mask &= ~M_TEMP;
   } else if (pending_.mask & M_FAN) {
     uint8_t fan_byte = CMD_FAN_AUTO;
-    if (this->custom_fan_mode.has_value()) {
-      const std::string &c = *this->custom_fan_mode;
-      if (c == FAN_LOW_STR)        fan_byte = CMD_FAN_LOW;
-      else if (c == FAN_MLOW_STR)  fan_byte = CMD_FAN_MLOW;
-      else if (c == FAN_MED_STR)   fan_byte = CMD_FAN_MED;
-      else if (c == FAN_MHIGH_STR) fan_byte = CMD_FAN_MHIGH;
-      else if (c == FAN_HIGH_STR)  fan_byte = CMD_FAN_HIGH;
+    const StringRef cfm = this->get_custom_fan_mode();
+    if (!cfm.empty()) {
+      if (cfm == FAN_LOW_STR)        fan_byte = CMD_FAN_LOW;
+      else if (cfm == FAN_MLOW_STR)  fan_byte = CMD_FAN_MLOW;
+      else if (cfm == FAN_MED_STR)   fan_byte = CMD_FAN_MED;
+      else if (cfm == FAN_MHIGH_STR) fan_byte = CMD_FAN_MHIGH;
+      else if (cfm == FAN_HIGH_STR)  fan_byte = CMD_FAN_HIGH;
     }
     // else: fan_mode is AUTO (or unset) -> CMD_FAN_AUTO
     f[16] = fan_byte;
