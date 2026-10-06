@@ -204,7 +204,7 @@ class HisenseWings : public Component,
   // full-state dump is 132 bytes. A smaller buffer silently drops every
   // state frame (overflow-reset), so the climate entity never gets real
   // state back and the HA UI reverts to defaults.
-  static constexpr size_t RX_MAX = 160;
+  static constexpr size_t RX_MAX = 200;
   uint8_t rx_buf_[RX_MAX] {};
   size_t rx_len_ {0};
 

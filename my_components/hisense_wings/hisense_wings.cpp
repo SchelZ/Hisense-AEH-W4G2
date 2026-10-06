@@ -7,6 +7,7 @@
 
 #include "hisense_wings.h"
 #include "esphome/core/log.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/string_ref.h"
 
 namespace esphome {
@@ -276,12 +277,19 @@ void HisenseWings::handle_frame_(const uint8_t *data, size_t len) {
   }
 
   rx_frames_ok_++;
-  ESP_LOGD(TAG, "RX frame kind=0x%02X len=%u CRC OK", data[4], (unsigned) len);
+  ESP_LOGD(TAG, "RX frame dir=0x%02X len_byte=0x%02X total=%u CRC OK",
+           data[2], data[4], (unsigned) len);
 
-  // We only decode the 0x7B full-state dump (132 bytes). Short polls and
-  // response frames carry no useful state for us.
-  if (len < 70 || data[4] != 0x7B) return;
+  // The full-state dump is the long frame the AC sends back (byte[4] is a
+  // length field: this unit uses a 160-byte frame, not the 132-byte one the
+  // old docs described). Accept any long AC->module frame as state; short
+  // handshake/ack replies carry no state for us.
+  if (len < 70 || data[2] != 0x01) return;
 
+  // Raw dump of the state frame's leading bytes so the field offsets can be
+  // verified/corrected against the real 160-byte layout.
+  ESP_LOGD(TAG, "state raw[0..47]: %s",
+           format_hex_pretty(data, len < 48 ? len : 48).c_str());
   ESP_LOGD(TAG, "state frame: mode=0x%02X target=%u room=%u coil=%u",
            data[18], data[19], data[20], data[46]);
 
