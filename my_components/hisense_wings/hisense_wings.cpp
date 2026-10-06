@@ -98,11 +98,16 @@ static constexpr uint8_t STATE_MODE_UPPER_MASK  = 0xF0;
 static constexpr uint8_t STATE_MODE_RUNNING_BIT = 0x08;
 // Note: AUTO uses upper nibble 7 (0x78) when in cool sub-mode.
 
-// 0x7B state byte[35] — feature bitfield
-static constexpr uint8_t STATE_FEAT_V_SWING = 0x80;
-static constexpr uint8_t STATE_FEAT_H_SWING = 0x40;
+// 0x7B/0x97 state byte[35] — feature bitfield
+static constexpr uint8_t STATE_FEAT_V_SWING = 0x80;  // byte 35 bit: vertical swing active
 static constexpr uint8_t STATE_FEAT_ECO     = 0x04;
 static constexpr uint8_t STATE_FEAT_BOOST   = 0x02;
+
+// Horizontal swing is reported on byte[37] bit 0x80 (confirmed by capture:
+// OFF=0x00, H-only=0x80, BOTH=0x80). Byte 35 bit 0x40 is a baseline constant,
+// NOT horizontal swing.
+static constexpr uint8_t STATE_FEAT_H_SWING_BYTE = 37;
+static constexpr uint8_t STATE_FEAT_H_SWING_BIT  = 0x80;
 
 // 0x7B state byte[36] — more features
 static constexpr uint8_t STATE_FEAT_QUIET   = 0x04;
@@ -363,18 +368,15 @@ void HisenseWings::publish_from_status_() {
       break;
   }
 
-  // --- Swing (byte 35 bitfield) ---
-  // Vertical swing is the only state reliably encoded here (bit 0x80; bit 0x40
-  // is high at baseline). Horizontal/both ARE commandable (the louvers move),
-  // but where the AC reports them in the 160-byte frame isn't mapped yet, so
-  // don't clobber a user-selected HORIZONTAL/BOTH back to OFF on each poll.
-  const uint8_t feat_a = s[35];
-  if (feat_a & STATE_FEAT_V_SWING) {
-    this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
-  } else if (this->swing_mode != climate::CLIMATE_SWING_HORIZONTAL &&
-             this->swing_mode != climate::CLIMATE_SWING_BOTH) {
-    this->swing_mode = climate::CLIMATE_SWING_OFF;
-  }
+  // --- Swing ---
+  // Vertical = byte 35 bit 0x80; horizontal = byte 37 bit 0x80 (mapped from
+  // live captures of OFF / H-only / BOTH). Both bits set => BOTH.
+  const bool v_sw = (s[35] & STATE_FEAT_V_SWING) != 0;
+  const bool h_sw = (s[STATE_FEAT_H_SWING_BYTE] & STATE_FEAT_H_SWING_BIT) != 0;
+  if (v_sw && h_sw)  this->swing_mode = climate::CLIMATE_SWING_BOTH;
+  else if (v_sw)     this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
+  else if (h_sw)     this->swing_mode = climate::CLIMATE_SWING_HORIZONTAL;
+  else               this->swing_mode = climate::CLIMATE_SWING_OFF;
 
   this->publish_state();
 
