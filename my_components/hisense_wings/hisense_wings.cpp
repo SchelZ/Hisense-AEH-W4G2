@@ -369,14 +369,17 @@ void HisenseWings::publish_from_status_() {
   }
 
   // --- Swing ---
-  // Vertical = byte 35 bit 0x80; horizontal = byte 37 bit 0x80 (mapped from
-  // live captures of OFF / H-only / BOTH). Both bits set => BOTH.
-  const bool v_sw = (s[35] & STATE_FEAT_V_SWING) != 0;
-  const bool h_sw = (s[STATE_FEAT_H_SWING_BYTE] & STATE_FEAT_H_SWING_BIT) != 0;
-  if (v_sw && h_sw)  this->swing_mode = climate::CLIMATE_SWING_BOTH;
-  else if (v_sw)     this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
-  else if (h_sw)     this->swing_mode = climate::CLIMATE_SWING_HORIZONTAL;
-  else               this->swing_mode = climate::CLIMATE_SWING_OFF;
+  // Readback intentionally left optimistic (we do NOT overwrite swing_mode from
+  // the state frame). This AC keeps vertical and horizontal as independent
+  // states, and we have no confirmed "horizontal OFF" bus command: vertical
+  // uses 0xC0/0x40, horizontal turns ON with 0x70, but nothing observed turns
+  // horizontal back off (byte 37 bit 0x80 stays set). Reflecting the live state
+  // therefore makes the single Home Assistant swing selector fight the user —
+  // e.g. selecting VERTICAL snaps to BOTH because horizontal is still on. Until
+  // the horizontal-off command is captured from the Hisense app, keep the
+  // user's selection (matches the behaviour before state readback existed).
+  // State bits for reference: vertical = byte 35 bit 0x80, horizontal =
+  // byte 37 bit 0x80.
 
   this->publish_state();
 
