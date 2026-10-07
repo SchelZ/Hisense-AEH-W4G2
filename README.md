@@ -2,8 +2,8 @@
 # ! This project was done for Hisense Wings Comfort 12000BTU, code AERKB35MR0B
 * Wi-Fi module used in this project is AEH-W4G2
 * This project scopes in flashing esphome on AEH-W4G2 ; have all the commands that Hisense app has ; have OTA available for easier features updates
-* RAM: 13.9% (used 36404 bytes from 262144 bytes)
-* Flash: 93.0% (used 445692 bytes from 479232 bytes)
+* RAM: 14.0 % (used 36584 bytes from 262144 bytes)
+* Flash: 93.6% (used 448652 bytes from 479232 bytes)
 </br>
 
 ### ! This is the circuit diagram used to sniff the commands made by AEH-W4G2 Wi-Fi module using ESP32 !
