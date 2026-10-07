@@ -65,10 +65,11 @@ external_components:
 logger:
   # DEBUG so the hisense_wings component's RX/TX/state lines are visible over
   # the network API (set back to WARN once the bus is confirmed working).
-  level: DEBUG
+  # you might want to change log level to WARN to reduce more the size of the final bin
+  level: INFO  
   baud_rate: 0
   logs:
-    hisense_wings: DEBUG
+    hisense_wings: INFO
  
 ota:
   - platform: esphome
