@@ -73,11 +73,15 @@ static constexpr uint8_t CMD_SLEEP_GENERAL = 0x03;
 static constexpr uint8_t CMD_BUZZER_BEEP = 0x04;
 static constexpr uint8_t CMD_BUZZER_MUTE = 0x00;
 
-// 0x29 byte[32] — swing command.
-static constexpr uint8_t CMD_SWING_OFF    = 0x40;  // confirmed
-static constexpr uint8_t CMD_SWING_VERT   = 0xC0;  // confirmed
-static constexpr uint8_t CMD_SWING_HORIZ  = 0x70;  // physical H-swing (state not read back yet)
-static constexpr uint8_t CMD_SWING_BOTH   = 0xF0;  // physical both
+// 0x29 byte[32] — swing command. Full-state values that set BOTH axes at once.
+// Bitfield: 0x40 base, 0x10 "apply both axes", 0x80 vertical on, 0x20 horizontal
+// on. The earlier 0x40/0xC0 lacked the 0x10 apply bit, so they only changed
+// vertical and left horizontal running (it could never be switched off). These
+// set vertical and horizontal explicitly every time.
+static constexpr uint8_t CMD_SWING_OFF    = 0x50;  // V off + H off
+static constexpr uint8_t CMD_SWING_VERT   = 0xD0;  // V on  + H off
+static constexpr uint8_t CMD_SWING_HORIZ  = 0x70;  // V off + H on
+static constexpr uint8_t CMD_SWING_BOTH   = 0xF0;  // V on  + H on
 
 // 0x29 byte[33] — ECO (upper nibble) + BOOST (lower nibble). Can combine.
 static constexpr uint8_t CMD_ECO_OFF   = 0x10;
@@ -369,17 +373,15 @@ void HisenseWings::publish_from_status_() {
   }
 
   // --- Swing ---
-  // Readback intentionally left optimistic (we do NOT overwrite swing_mode from
-  // the state frame). This AC keeps vertical and horizontal as independent
-  // states, and we have no confirmed "horizontal OFF" bus command: vertical
-  // uses 0xC0/0x40, horizontal turns ON with 0x70, but nothing observed turns
-  // horizontal back off (byte 37 bit 0x80 stays set). Reflecting the live state
-  // therefore makes the single Home Assistant swing selector fight the user —
-  // e.g. selecting VERTICAL snaps to BOTH because horizontal is still on. Until
-  // the horizontal-off command is captured from the Hisense app, keep the
-  // user's selection (matches the behaviour before state readback existed).
-  // State bits for reference: vertical = byte 35 bit 0x80, horizontal =
-  // byte 37 bit 0x80.
+  // Vertical = byte 35 bit 0x80; horizontal = byte 37 bit 0x80 (mapped from
+  // live captures). With the full-state commands above, a selection drives both
+  // axes, so the readback and the user's choice stay consistent.
+  const bool v_sw = (s[35] & STATE_FEAT_V_SWING) != 0;
+  const bool h_sw = (s[STATE_FEAT_H_SWING_BYTE] & STATE_FEAT_H_SWING_BIT) != 0;
+  if (v_sw && h_sw)  this->swing_mode = climate::CLIMATE_SWING_BOTH;
+  else if (v_sw)     this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
+  else if (h_sw)     this->swing_mode = climate::CLIMATE_SWING_HORIZONTAL;
+  else               this->swing_mode = climate::CLIMATE_SWING_OFF;
 
   this->publish_state();
 
