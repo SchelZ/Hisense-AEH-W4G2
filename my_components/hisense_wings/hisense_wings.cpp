@@ -102,16 +102,15 @@ static constexpr uint8_t STATE_MODE_UPPER_MASK  = 0xF0;
 static constexpr uint8_t STATE_MODE_RUNNING_BIT = 0x08;
 // Note: AUTO uses upper nibble 7 (0x78) when in cool sub-mode.
 
-// 0x7B/0x97 state byte[35] — feature bitfield
-static constexpr uint8_t STATE_FEAT_V_SWING = 0x80;  // byte 35 bit: vertical swing active
+// 0x7B/0x97 state byte[35] — feature bitfield. Swing lives entirely in this
+// byte: bit 0x80 = vertical active, bit 0x40 = horizontal active. Confirmed
+// with the full-state commands: OFF=0x00, VERTICAL=0x80, HORIZONTAL=0x40,
+// BOTH=0xC0. (Byte 37 is NOT horizontal — it differs between the 0x7B and 0x97
+// frame types for the same state, so it was a red herring.)
+static constexpr uint8_t STATE_FEAT_V_SWING = 0x80;
+static constexpr uint8_t STATE_FEAT_H_SWING = 0x40;
 static constexpr uint8_t STATE_FEAT_ECO     = 0x04;
 static constexpr uint8_t STATE_FEAT_BOOST   = 0x02;
-
-// Horizontal swing is reported on byte[37] bit 0x80 (confirmed by capture:
-// OFF=0x00, H-only=0x80, BOTH=0x80). Byte 35 bit 0x40 is a baseline constant,
-// NOT horizontal swing.
-static constexpr uint8_t STATE_FEAT_H_SWING_BYTE = 37;
-static constexpr uint8_t STATE_FEAT_H_SWING_BIT  = 0x80;
 
 // 0x7B state byte[36] — more features
 static constexpr uint8_t STATE_FEAT_QUIET   = 0x04;
@@ -373,11 +372,11 @@ void HisenseWings::publish_from_status_() {
   }
 
   // --- Swing ---
-  // Vertical = byte 35 bit 0x80; horizontal = byte 37 bit 0x80 (mapped from
-  // live captures). With the full-state commands above, a selection drives both
-  // axes, so the readback and the user's choice stay consistent.
+  // Both axes are in byte 35: 0x80 = vertical, 0x40 = horizontal. With the
+  // full-state commands above, a selection drives both axes, so the readback
+  // and the user's choice stay consistent.
   const bool v_sw = (s[35] & STATE_FEAT_V_SWING) != 0;
-  const bool h_sw = (s[STATE_FEAT_H_SWING_BYTE] & STATE_FEAT_H_SWING_BIT) != 0;
+  const bool h_sw = (s[35] & STATE_FEAT_H_SWING) != 0;
   if (v_sw && h_sw)  this->swing_mode = climate::CLIMATE_SWING_BOTH;
   else if (v_sw)     this->swing_mode = climate::CLIMATE_SWING_VERTICAL;
   else if (h_sw)     this->swing_mode = climate::CLIMATE_SWING_HORIZONTAL;
